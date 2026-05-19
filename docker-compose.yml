@@ -1,0 +1,90 @@
+services:
+  db:
+    image: mysql:8.0
+    container_name: autotoss_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+      MYSQL_USER: ${DB_USER}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${DB_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  ollama:
+    image: ollama/ollama
+    container_name: autotoss_ollama
+    restart: unless-stopped
+    volumes:
+      - ollama_data:/root/.ollama
+      - ./models:/models
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_NUM_PARALLEL=1
+      - OLLAMA_KEEP_ALIVE=-1
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+  ai:
+    build:
+      context: .
+      dockerfile: ai/Dockerfile
+    container_name: autotoss_ai
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./uploads:/app/uploads
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-autotos-q8}
+      - OLLAMA_TIMEOUT=300
+      - GENERATION_WORKERS=1
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: autotoss_web
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=mysql+mysqlconnector://${DB_USER}:${DB_PASSWORD}@db:3306/${DB_NAME}
+      - SECRET_KEY=${SECRET_KEY}
+      - AUTO_TOS_MODEL_URL=http://ai:8000
+      - AUTO_TOS_MODEL_TIMEOUT=300
+      - FLASK_ENV=production
+      - FLASK_APP=app.py
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET}
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./uploads:/app/uploads
+    depends_on:
+      db:
+        condition: service_healthy
+      ai:
+        condition: service_healthy
+volumes:
+  db_data:
+  ollama_data:
