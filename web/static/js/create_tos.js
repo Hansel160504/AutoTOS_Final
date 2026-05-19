@@ -68,6 +68,40 @@ document.addEventListener("DOMContentLoaded", () => {
         if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
         return (bytes / 1024 / 1024).toFixed(2) + ' MB';
     }
+/** Derive a clean topic name from a filename.
+     *  Strips extension, normalizes separators, takes first 5 words. */
+    function filenameToTopic(filename) {
+        let name = (filename || '').replace(/\.[^.]+$/, '');
+        name = name.replace(/[_\-]+/g, ' ');
+        name = name.replace(/\s+/g, ' ').trim();
+        const words = name.split(' ').filter(w => w.length > 0);
+        return words.slice(0, 5).join(' ');
+    }
+/** Default test instruction by type (per panel recommendation). */
+    const TEST_DESC_DEFAULTS = {
+        mcq:        "Read each question carefully and choose the best answer from the given options. Write the letter of your answer.",
+        truefalse:  "Read each statement carefully. Write True if the statement is correct and False if it is incorrect.",
+        open_ended: "Read each question carefully and provide a clear and complete answer.",
+    };
+
+    /** Apply the standard description for a test row's currently-selected type,
+     *  but only if the user hasn't typed something custom. */
+    function applyDefaultDesc(row) {
+        if (!row) return;
+        const typeSel = row.querySelector('.testType');
+        const descIn  = row.querySelector('.testDesc');
+        if (!typeSel || !descIn) return;
+
+        const defaultText = TEST_DESC_DEFAULTS[typeSel.value] || '';
+        const currentText = (descIn.value || '').trim();
+
+        // Don't overwrite a manual edit. We track which auto-default was
+        // last applied so a fresh type-change can replace it.
+        if (!currentText || currentText === row.dataset.lastAutoDesc) {
+            descIn.value = defaultText;
+            row.dataset.lastAutoDesc = defaultText;
+        }
+    }
 
     /** Per-row blob URL — keep reference so we can revoke on clear/replace */
     function clearBlobUrl(row) {
@@ -132,7 +166,11 @@ document.addEventListener("DOMContentLoaded", () => {
             }
             if (sizeEl) sizeEl.textContent = formatSize(file.size);
             if (meta)   meta.classList.add('show');
-
+// ── AUTO-FILL TOPIC NAME from filename if empty ──
+            const topicInput = row.querySelector('.topicName');
+            if (topicInput && !topicInput.value.trim()) {
+                topicInput.value = filenameToTopic(file.name);
+            }
             // Pre-create the blob URL — preview button is now ready instantly
             row.dataset.previewUrl = URL.createObjectURL(file);
         });
@@ -582,8 +620,22 @@ document.addEventListener("DOMContentLoaded", () => {
     // ================================================================
     function updateTestCount() {
         let total = 0;
-        document.querySelectorAll(".testItems").forEach(i => { total += parseInt(i.value || 0); });
+        document.querySelectorAll(".testItems").forEach(i => {
+            total += parseInt(i.value || 0);
+        });
         if (testTotalCount) testTotalCount.textContent = total;
+
+        // ── OVER-LIMIT: visual warning when total exceeds totalQuiz ──
+        const totalQuizEl = document.getElementById("totalQuizItemsInput");
+        const totalQuiz = parseInt((totalQuizEl && totalQuizEl.value) || 0, 10);
+        const over = total > totalQuiz && totalQuiz > 0;
+
+        if (confirmTestsBtn) {
+            confirmTestsBtn.classList.toggle('over-limit', over);
+        }
+        if (testTotalCount) {
+            testTotalCount.style.color = over ? 'var(--red)' : 'var(--blue)';
+        }
     }
 
     generateBtn.onclick = () => {
@@ -629,12 +681,24 @@ document.addEventListener("DOMContentLoaded", () => {
                 <button class="removeTest btn secondary" type="button">✕</button>
             `;
             if (testList) testList.appendChild(div);
+
+            // ── AUTO-DESC ── Apply standard description for the default type
+            applyDefaultDesc(div);
+            // When the user changes the type, refresh the default description
+            const typeSel = div.querySelector('.testType');
+            if (typeSel) {
+                typeSel.addEventListener('change', () => applyDefaultDesc(div));
+            }
+
             updateTestCount();
         };
     }
 
     document.addEventListener("click", (e) => { if (e.target.classList.contains("removeTest")) { e.target.closest(".test-row").remove(); updateTestCount(); } });
-    document.addEventListener("input", (e) => { if (e.target.classList.contains("testItems")) updateTestCount(); });
+    document.addEventListener("input", (e) => {
+        if (e.target.classList.contains("testItems")) updateTestCount();
+        if (e.target.id === "totalQuizItemsInput") updateTestCount();
+    });
 
     if (cancelTestModalBtn) cancelTestModalBtn.onclick = () => { if (testModal) testModal.style.display = "none"; };
 

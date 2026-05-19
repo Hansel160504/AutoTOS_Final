@@ -435,6 +435,18 @@ table#tosTable input:focus { border-color: var(--blue); }
     filter: brightness(0.92);
 }
 .btn.primary:active   { background: #1e40af; }
+/* Test modal "Confirm & Generate" — red when test items exceed total */
+.btn.primary.over-limit {
+    background: var(--red) !important;
+    box-shadow: 0 1px 4px rgba(220, 38, 38, 0.30) !important;
+}
+.btn.primary.over-limit:hover {
+    background: #b91c1c !important;
+    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35) !important;
+}
+.btn.primary.over-limit:active {
+    background: #991b1b !important;
+}
 .btn.secondary:active { background: var(--border-col); }
 
 .btn-row { display: flex; gap: 10px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
