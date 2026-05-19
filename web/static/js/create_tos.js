@@ -628,7 +628,8 @@ document.addEventListener("DOMContentLoaded", () => {
         // ── OVER-LIMIT: visual warning when total exceeds totalQuiz ──
         const totalQuizEl = document.getElementById("totalQuizItemsInput");
         const totalQuiz = parseInt((totalQuizEl && totalQuizEl.value) || 0, 10);
-        const over = total > totalQuiz && totalQuiz > 0;
+        const hasTestRows = document.querySelectorAll(".test-row").length > 0;
+        const over = hasTestRows && totalQuiz > 0 && total !== totalQuiz;
 
         if (confirmTestsBtn) {
             confirmTestsBtn.classList.toggle('over-limit', over);
