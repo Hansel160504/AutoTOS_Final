@@ -19,6 +19,7 @@ from typing import List, Optional
 
 from docx import Document
 from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.enum.section import WD_ORIENTATION
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -27,14 +28,16 @@ from docx.shared import Inches, Pt, RGBColor
 logger = logging.getLogger(__name__)
 
 # Column widths for the TOS table, in twips (1 inch = 1440 twips).
+# Column widths for the TOS table, in twips (1 inch = 1440 twips).
+# Landscape long bond (13" x 8.5") with 0.7" margins → usable width = 11.6"
 _COL_W = [
-    int(2.00 * 1440),   # Content Outline
-    int(0.65 * 1440),   # Hours
-    int(1.10 * 1440),   # FAM
-    int(1.10 * 1440),   # INT
-    int(1.10 * 1440),   # CRE
-    int(0.55 * 1440),   # Total
-]  # sum = 9360 twips = 6.5 in (matches body width after 1" margins)
+    int(3.60 * 1440),   # Content Outline
+    int(0.90 * 1440),   # Hours
+    int(2.20 * 1440),   # FAM
+    int(2.20 * 1440),   # INT
+    int(2.20 * 1440),   # CRE
+    int(0.50 * 1440),   # Total
+]  # sum = 16704 twips = 11.6 in# sum = 9360 twips = 6.5 in (matches body width after 1" margins)
 
 # ── Header / footer image paths ─────────────────────────────────────
 # These live inside the web container at /app/imgs/.
@@ -61,12 +64,22 @@ def build_docx(
     int_pct: int,
     cre_pct: int,
     total_items: int,
+    # NEW (all optional → existing callers/records keep working)
+    semester: str = "",          # "1st" | "2nd" | ""
+    academic_year: str = "",     # e.g. "2025-2026"
+    examination: str = "",       # "Midterm" | "Final" | ""
+    descriptive: str = "",       # course name, e.g. "Machine Learning"
+    subject: str = "",           # course code,  e.g. "CS328"
+    prepared_by: str = "",       # instructor name (uppercased on render)
 ) -> BytesIO:
     """Public entry point. Returns an in-memory .docx."""
     return _DocxBuilder(
         title=title, cilos=cilos, topics=topics, quizzes=quizzes,
         fam_pct=fam_pct, int_pct=int_pct, cre_pct=cre_pct,
         total_items=total_items,
+        semester=semester, academic_year=academic_year,
+        examination=examination, descriptive=descriptive,
+        subject=subject, prepared_by=prepared_by,
     ).build()
 
 
@@ -79,6 +92,8 @@ class _DocxBuilder:
     def __init__(
         self, *, title, cilos, topics, quizzes,
         fam_pct, int_pct, cre_pct, total_items,
+        semester="", academic_year="", examination="",
+        descriptive="", subject="", prepared_by="",
     ):
         self.title = title
         self.cilos = cilos
@@ -88,6 +103,12 @@ class _DocxBuilder:
         self.int_pct = int_pct
         self.cre_pct = cre_pct
         self.total_items = total_items
+        self.semester = semester
+        self.academic_year = academic_year
+        self.examination = examination
+        self.descriptive = descriptive
+        self.subject = subject
+        self.prepared_by = prepared_by
 
         self.doc = Document()
         self._configure_page()
@@ -95,18 +116,22 @@ class _DocxBuilder:
         self._add_header_and_footer()
 
     # ── Public ─────────────────────────────────────────────────
+    # ── Public ─────────────────────────────────────────────────
     def build(self) -> BytesIO:
-        # ── Page 1: TOS (CILO + Specification Table) ──
+        # ── Page 1: TOS (title, meta, CILO, table, signatures, note) ──
         self._add_title_header()
+        self._add_metadata_section()
         if self.cilos:
             self._add_cilos_section()
         self._add_tos_table()
+        self._add_signatures_section()
+        self._add_form_note()
 
-        # ── Page 2+: Exam Items (questions only) ──
+        # ── Page 2+: Exam Items (UNCHANGED) ──
         self._add_page_break()
         self._add_exam_items(include_answers=False)
 
-        # ── Page N+: Answer Key ──
+        # ── Page N+: Answer Key (UNCHANGED) ──
         self._add_page_break()
         self._add_answer_key()
 
@@ -114,17 +139,18 @@ class _DocxBuilder:
         self.doc.save(buf)
         buf.seek(0)
         return buf
-
     # ── Page / style config ────────────────────────────────────
     def _configure_page(self) -> None:
         sec = self.doc.sections[0]
-        sec.page_width = Inches(8.5)
-        sec.page_height = Inches(13)
-        sec.top_margin = sec.bottom_margin = Inches(1)
-        sec.left_margin = sec.right_margin = Inches(1)
-        # Reserve space for header/footer
-        sec.header_distance = Inches(0.4)
-        sec.footer_distance = Inches(0.4)
+        sec.orientation = WD_ORIENTATION.LANDSCAPE
+        # Long bond paper, landscape: 13" wide × 8.5" tall
+        sec.page_width = Inches(13)
+        sec.page_height = Inches(8.5)
+        # Tighter margins to fit metadata + table + signatures on page 1
+        sec.top_margin = sec.bottom_margin = Inches(0.6)
+        sec.left_margin = sec.right_margin = Inches(0.7)
+        sec.header_distance = Inches(0.3)
+        sec.footer_distance = Inches(0.3)
 
     def _configure_default_style(self) -> None:
         normal = self.doc.styles["Normal"]
@@ -340,30 +366,32 @@ class _DocxBuilder:
         p_pr.append(borders)
 
     # ── Title header at the top of page 1 ──────────────────────
+    # ── Title header at the top of page 1 ──────────────────────
     def _add_title_header(self) -> None:
-        """Document title above the CILO section."""
+        """Document title above the metadata strip."""
         self._add_para(
-            self.title or "Table of Specification",
+            "TABLE OF SPECIFICATIONS",
             bold=True, size=14,
             align=WD_ALIGN_PARAGRAPH.CENTER,
-            space_before=0, space_after=2,
+            space_before=0, space_after=6,
         )
-        self._add_para(
-            f"Total Items: {self.total_items}",
-            size=10, italic=True,
-            align=WD_ALIGN_PARAGRAPH.CENTER,
-            space_after=8,
-        )
-
+        if self.title:
+            self._add_para(
+                self.title,
+                bold=True, size=11, italic=True,
+                align=WD_ALIGN_PARAGRAPH.CENTER,
+                space_after=6,
+            )
+    # ── Section 1: CILOs ───────────────────────────────────────
     # ── Section 1: CILOs ───────────────────────────────────────
     def _add_cilos_section(self) -> None:
         self._add_para(
-            "Cognitive Objectives / Behavioral Dimensions / Thinking Skills",
-            bold=True, size=10, align=WD_ALIGN_PARAGRAPH.CENTER,
-            space_after=2,
+            "COGNITIVE OBJECTIVES / BEHAVIORAL DIMENSIONS / THINKING SKILLS",
+            bold=True, size=10, align=WD_ALIGN_PARAGRAPH.LEFT,
+            space_before=4, space_after=2,
         )
         self._add_para(
-            "Intended Learning Outcomes (CILO):",
+            "Course Intended Learning Outcomes (CILO):",
             bold=True, size=10, space_before=2, space_after=3,
         )
         for i, c in enumerate(self.cilos, 1):
@@ -371,9 +399,8 @@ class _DocxBuilder:
             p.paragraph_format.left_indent = Inches(0.25)
             p.paragraph_format.space_before = Pt(0)
             p.paragraph_format.space_after = Pt(2)
-            self._run(p, f"{i}.  {c}", size=10)
-        self._add_para(space_after=8)
-
+            self._run(p, f"CLO{i}.  {c}", size=10)
+        self._add_para(space_after=6)
     # ── Section 2: TOS Table ───────────────────────────────────
     def _add_tos_table(self) -> None:
         self._add_para(
@@ -657,3 +684,106 @@ class _DocxBuilder:
             p2.paragraph_format.space_before = Pt(0)
             p2.paragraph_format.space_after = Pt(3)
             self._run(p2, q["answer_text"], italic=True, size=9)
+
+    # ── Section 1.5: Metadata strip (semester / exam / subject) ─
+    def _add_metadata_section(self) -> None:
+        """Two stacked 2-column borderless rows below the title."""
+        check = lambda v: "\u2611" if v else "\u2610"  # ☑ / ☐
+        ay = self.academic_year or "________"
+        sem1 = check(self.semester.lower().startswith("1"))
+        sem2 = check(self.semester.lower().startswith("2"))
+        ex_mid = check(self.examination.lower().startswith("mid"))
+        ex_fin = check(self.examination.lower().startswith("fin"))
+
+        tbl = self.doc.add_table(rows=2, cols=2)
+        tbl.autofit = False
+        self._set_table_no_borders(tbl)
+        self._set_table_width(tbl, sum(_COL_W))
+
+        half = sum(_COL_W) // 2
+        for r in tbl.rows:
+            for cell in r.cells:
+                self._set_cell_width(cell, half)
+                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
+        # Row 1: Semester/AY  |  Examination
+        p = tbl.rows[0].cells[0].paragraphs[0]
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(0)
+        self._run(p, "Semester, Academic Year: ", bold=True, size=10)
+        self._run(p, f"  {sem1} 1st Sem AY {ay}    {sem2} 2nd Sem AY {ay}", size=10)
+
+        p = tbl.rows[0].cells[1].paragraphs[0]
+        p.paragraph_format.space_before = Pt(0); p.paragraph_format.space_after = Pt(0)
+        self._run(p, "Examination: ", bold=True, size=10)
+        self._run(p, f"  {ex_mid} Midterm    {ex_fin} Final", size=10)
+
+        # Row 2: Descriptive | Subject
+        p = tbl.rows[1].cells[0].paragraphs[0]
+        p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(0)
+        self._run(p, "Descriptive: ", bold=True, size=10)
+        self._run(p, self.descriptive or "________", size=10)
+
+        p = tbl.rows[1].cells[1].paragraphs[0]
+        p.paragraph_format.space_before = Pt(2); p.paragraph_format.space_after = Pt(0)
+        self._run(p, "Subject: ", bold=True, size=10)
+        self._run(p, self.subject or "________", size=10)
+
+        self._add_para(space_after=4)
+
+    # ── Section 2.5: Signatures (Prepared / Reviewed / Approved) ─
+    # Reviewed by + Approved by are FIXED per institutional policy.
+    _REVIEWED_NAME = "CHRISTINE W. PITOS, MSCS"
+    _APPROVED_NAME = "LOLITA M. MARTIN, PhD(CAR)"
+
+    def _add_signatures_section(self) -> None:
+        prepared = (self.prepared_by or "").strip().upper() or "________________________"
+
+        # — Prepared by —
+        self._add_para("Prepared by:", bold=True, size=10,
+                       space_before=10, space_after=18)
+        self._add_para(prepared, bold=True, size=10,
+                       align=WD_ALIGN_PARAGRAPH.LEFT, space_after=0)
+        self._add_para("Instructor", size=10, italic=True, space_after=10)
+
+        # — Reviewed by (two signatories, side by side) —
+        self._add_para("Reviewed by:", bold=True, size=10,
+                       space_before=4, space_after=18)
+        tbl = self.doc.add_table(rows=2, cols=2)
+        tbl.autofit = False
+        self._set_table_no_borders(tbl)
+        self._set_table_width(tbl, sum(_COL_W))
+        half = sum(_COL_W) // 2
+        for r in tbl.rows:
+            for cell in r.cells:
+                self._set_cell_width(cell, half)
+
+        self._cell_write(tbl.cell(0, 0), self._REVIEWED_NAME,
+                         bold=True, size=10, align=WD_ALIGN_PARAGRAPH.LEFT)
+        self._cell_write(tbl.cell(0, 1), self._REVIEWED_NAME,
+                         bold=True, size=10, align=WD_ALIGN_PARAGRAPH.LEFT)
+        self._cell_write(tbl.cell(1, 0), "Program Coordinator",
+                         italic=True, size=10, align=WD_ALIGN_PARAGRAPH.LEFT)
+        self._cell_write(tbl.cell(1, 1), "Department Chair",
+                         italic=True, size=10, align=WD_ALIGN_PARAGRAPH.LEFT)
+        self._add_para(space_after=8)
+
+        # — Approved by —
+        self._add_para("Approved by:", bold=True, size=10,
+                       space_before=4, space_after=18)
+        self._add_para(self._APPROVED_NAME, bold=True, size=10,
+                       align=WD_ALIGN_PARAGRAPH.LEFT, space_after=0)
+        self._add_para("Assistant Campus Director",
+                       italic=True, size=10, space_after=6)
+
+    # ── Section 2.7: Form-code note ─────────────────────────────
+    def _add_form_note(self) -> None:
+        self._add_para(
+            "Note: Allocation of the percentage will be identified by the "
+            "faculty based on what is outlined on the syllabus.",
+            italic=True, size=9, space_before=4, space_after=2,
+        )
+        self._add_para(
+            "FM-ACAD-007/REV003/02.05.2025",
+            italic=True, size=8, align=WD_ALIGN_PARAGRAPH.RIGHT,
+            space_after=0,
+        )
