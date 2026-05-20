@@ -88,3 +88,6 @@ desktop.ini
 .vscode/
 .idea/
 *.sublime-*
+
+# Nano emergency backups
+*.save
