@@ -48,7 +48,7 @@ services:
     volumes:
       - ./uploads:/app/uploads
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
+      - OLLAMA_BASE_URL=http://1.208.108.242:33284
       - OLLAMA_MODEL=${OLLAMA_MODEL:-autotos-q8}
       - OLLAMA_TIMEOUT=300
       - GENERATION_WORKERS=1
